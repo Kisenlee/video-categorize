@@ -1,8 +1,44 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CategoryItem, ClassifyMode, VideoItem } from '../../shared/types'
 import VideoPlayer, { formatTime } from './components/VideoPlayer'
+import { formatClassifyError, interpolate, useI18n, type Messages } from './i18n'
+
+type Status =
+  | { type: 'idle'; key: 'statusStart' }
+  | { type: 'idle'; key: 'statusSource'; dir: string }
+  | { type: 'idle'; key: 'statusTarget'; dir: string }
+  | { type: 'idle'; key: 'statusMoving'; name: string }
+  | { type: 'idle'; key: 'statusCopying'; n: number }
+  | { type: 'ok'; key: 'statusDone' }
+  | { type: 'ok'; key: 'statusRemoved'; name: string }
+  | { type: 'error'; key: 'classifyFailed' }
+  | { type: 'error'; key: 'raw'; text: string }
+
+function renderStatus(status: Status, t: Messages): string {
+  switch (status.key) {
+    case 'statusStart':
+      return t.statusStart
+    case 'statusSource':
+      return interpolate(t.statusSource, { dir: status.dir })
+    case 'statusTarget':
+      return interpolate(t.statusTarget, { dir: status.dir })
+    case 'statusMoving':
+      return interpolate(t.statusMoving, { name: status.name })
+    case 'statusCopying':
+      return interpolate(t.statusCopying, { n: status.n })
+    case 'statusDone':
+      return t.statusDone
+    case 'statusRemoved':
+      return interpolate(t.statusRemoved, { name: status.name })
+    case 'classifyFailed':
+      return t.classifyFailed
+    case 'raw':
+      return status.text
+  }
+}
 
 export default function App(): React.JSX.Element {
+  const { locale, t, setLocale } = useI18n()
   const [sourceDir, setSourceDir] = useState<string | null>(null)
   const [targetDir, setTargetDir] = useState<string | null>(null)
   const [videos, setVideos] = useState<VideoItem[]>([])
@@ -13,12 +49,9 @@ export default function App(): React.JSX.Element {
   const [editName, setEditName] = useState('')
   const [duration, setDuration] = useState<number | null>(null)
   const [mediaUrl, setMediaUrl] = useState<string | null>(null)
-  const [status, setStatus] = useState<{ type: 'idle' | 'ok' | 'error'; text: string }>({
-    type: 'idle',
-    text: '选择待处理文件夹与目标文件夹开始分类'
-  })
+  const [status, setStatus] = useState<Status>({ type: 'idle', key: 'statusStart' })
   const [busy, setBusy] = useState(false)
-  const [playError, setPlayError] = useState<string | null>(null)
+  const [playFailed, setPlayFailed] = useState(false)
 
   const current = videos[index] ?? null
   const total = videos.length
@@ -42,7 +75,7 @@ export default function App(): React.JSX.Element {
     const dir = await window.api.selectSourceFolder()
     if (!dir) return
     setSourceDir(dir)
-    setStatus({ type: 'idle', text: `已选择待处理: ${dir}` })
+    setStatus({ type: 'idle', key: 'statusSource', dir })
     await refreshVideos(dir)
   }
 
@@ -53,7 +86,7 @@ export default function App(): React.JSX.Element {
     const cats = await window.api.watchCategories(dir)
     setCategories(cats)
     setSelectedCats([])
-    setStatus({ type: 'idle', text: `已选择目标: ${dir}（子文件夹将实时刷新）` })
+    setStatus({ type: 'idle', key: 'statusTarget', dir })
   }
 
   useEffect(() => {
@@ -72,12 +105,12 @@ export default function App(): React.JSX.Element {
       setEditName('')
       setMediaUrl(null)
       setDuration(null)
-      setPlayError(null)
+      setPlayFailed(false)
       return
     }
     setEditName(current.basename)
     setDuration(null)
-    setPlayError(null)
+    setPlayFailed(false)
     setSelectedCats([])
     let cancelled = false
     void window.api.mediaToUrl(current.path).then((url) => {
@@ -95,12 +128,15 @@ export default function App(): React.JSX.Element {
       setVideos(list)
       if (list.length === 0) {
         setIndex(0)
-        setStatus({ type: 'ok', text: '全部处理完毕' })
+        setStatus({ type: 'ok', key: 'statusDone' })
         return
       }
-      // Stay at same index (next item slid into place); clamp if at end
       setIndex((prev) => Math.min(prev, list.length - 1))
-      setStatus({ type: 'ok', text: `已分类并移除: ${removedPath.split(/[/\\]/).pop()}` })
+      setStatus({
+        type: 'ok',
+        key: 'statusRemoved',
+        name: removedPath.split(/[/\\]/).pop() ?? removedPath
+      })
     },
     [sourceDir]
   )
@@ -108,7 +144,7 @@ export default function App(): React.JSX.Element {
   const runSingle = async (category: CategoryItem): Promise<void> => {
     if (!current || busy) return
     setBusy(true)
-    setStatus({ type: 'idle', text: `正在移动到「${category.name}」…` })
+    setStatus({ type: 'idle', key: 'statusMoving', name: category.name })
     const result = await window.api.classifySingle({
       sourcePath: current.path,
       newBasename: editName,
@@ -116,7 +152,11 @@ export default function App(): React.JSX.Element {
     })
     setBusy(false)
     if (!result.ok) {
-      setStatus({ type: 'error', text: result.error || '分类失败' })
+      setStatus({
+        type: 'error',
+        key: 'raw',
+        text: formatClassifyError(result.error || 'classifyFailed', t)
+      })
       return
     }
     await advanceAfterClassify(current.path)
@@ -125,7 +165,7 @@ export default function App(): React.JSX.Element {
   const runMulti = async (): Promise<void> => {
     if (!current || busy || selectedCats.length === 0) return
     setBusy(true)
-    setStatus({ type: 'idle', text: `正在复制到 ${selectedCats.length} 个分类…` })
+    setStatus({ type: 'idle', key: 'statusCopying', n: selectedCats.length })
     const result = await window.api.classifyMulti({
       sourcePath: current.path,
       newBasename: editName,
@@ -133,7 +173,11 @@ export default function App(): React.JSX.Element {
     })
     setBusy(false)
     if (!result.ok) {
-      setStatus({ type: 'error', text: result.error || '分类失败' })
+      setStatus({
+        type: 'error',
+        key: 'raw',
+        text: formatClassifyError(result.error || 'classifyFailed', t)
+      })
       return
     }
     await advanceAfterClassify(current.path)
@@ -146,48 +190,69 @@ export default function App(): React.JSX.Element {
   }
 
   const statusClass = useMemo(() => {
-    if (status.type === 'error') return 'status-bar error'
+    if (status.type === 'error' || playFailed) return 'status-bar error'
     if (status.type === 'ok') return 'status-bar ok'
     return 'status-bar'
-  }, [status.type])
+  }, [status.type, playFailed])
+
+  const statusLine = renderStatus(status, t)
 
   return (
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          视频<span>分类</span>助手
+          {t.brandPrefix}
+          <span>{t.brandAccent}</span>
+          {t.brandSuffix}
         </div>
 
         <div className="path-group">
           <button type="button" className="path-btn" onClick={() => void pickSource()}>
-            待处理文件夹
+            {t.sourceFolder}
           </button>
           <span className="path-display" title={sourceDir ?? ''}>
-            {sourceDir ?? '未选择'}
+            {sourceDir ?? t.notSelected}
           </span>
         </div>
 
         <div className="path-group">
           <button type="button" className="path-btn" onClick={() => void pickTarget()}>
-            目标文件夹
+            {t.targetFolder}
           </button>
           <span className="path-display" title={targetDir ?? ''}>
-            {targetDir ?? '未选择'}
+            {targetDir ?? t.notSelected}
           </span>
         </div>
 
         <div className="progress-chip">
           {total === 0 ? '0 / 0' : `${Math.min(index + 1, total)} / ${total}`}
         </div>
+
+        <div className="segmented lang-switch" role="group" aria-label="Language">
+          <button
+            type="button"
+            className={locale === 'zh' ? 'active' : ''}
+            onClick={() => setLocale('zh')}
+          >
+            {t.langZh}
+          </button>
+          <button
+            type="button"
+            className={locale === 'en' ? 'active' : ''}
+            onClick={() => setLocale('en')}
+          >
+            {t.langEn}
+          </button>
+        </div>
       </header>
 
       <div className="main">
         <aside className="panel panel-left">
-          <h2 className="panel-title">视频详情</h2>
+          <h2 className="panel-title">{t.videoDetails}</h2>
           {current ? (
             <>
               <div className="field">
-                <label htmlFor="rename">文件名（不含扩展名）</label>
+                <label htmlFor="rename">{t.filenameLabel}</label>
                 <input
                   id="rename"
                   value={editName}
@@ -197,35 +262,33 @@ export default function App(): React.JSX.Element {
                 />
               </div>
               <div className="meta">
-                扩展名：{current.ext || '—'}
+                {t.extensionLabel}
+                {current.ext || '—'}
               </div>
               <div className="meta" style={{ marginTop: 12 }}>
-                时长：{duration == null ? '读取中…' : formatTime(duration)}
+                {t.durationLabel}
+                {duration == null ? t.reading : formatTime(duration)}
               </div>
               <div className="meta-muted" title={current.path}>
                 {current.path}
               </div>
             </>
           ) : (
-            <p className="empty-hint">暂无待处理视频。请选择包含视频文件的文件夹。</p>
+            <p className="empty-hint">{t.noVideos}</p>
           )}
         </aside>
 
         <section className="panel-center" style={{ position: 'relative' }}>
-          <VideoPlayer
-            src={mediaUrl}
-            onDuration={setDuration}
-            onError={setPlayError}
-          />
-          {busy && <div className="busy-overlay">处理中…</div>}
+          <VideoPlayer src={mediaUrl} onDuration={setDuration} onPlayFailed={setPlayFailed} />
+          {busy && <div className="busy-overlay">{t.processing}</div>}
         </section>
 
         <aside className="panel panel-right">
-          <h2 className="panel-title">分类</h2>
+          <h2 className="panel-title">{t.categories}</h2>
 
           <div className="toggle-row">
-            <span className="toggle-label">模式</span>
-            <div className="segmented" role="group" aria-label="分类模式">
+            <span className="toggle-label">{t.mode}</span>
+            <div className="segmented" role="group" aria-label={t.classifyModeAria}>
               <button
                 type="button"
                 className={mode === 'single' ? 'active' : ''}
@@ -234,24 +297,22 @@ export default function App(): React.JSX.Element {
                   setSelectedCats([])
                 }}
               >
-                单类
+                {t.single}
               </button>
               <button
                 type="button"
                 className={mode === 'multi' ? 'active' : ''}
                 onClick={() => setMode('multi')}
               >
-                复类
+                {t.multi}
               </button>
             </div>
           </div>
 
           {!targetDir ? (
-            <p className="empty-hint">请先选择目标文件夹。其子目录将作为分类，并实时刷新。</p>
+            <p className="empty-hint">{t.pickTargetHint}</p>
           ) : categories.length === 0 ? (
-            <p className="empty-hint">
-              目标文件夹下还没有子目录。在资源管理器中新建文件夹后，这里会自动出现。
-            </p>
+            <p className="empty-hint">{t.emptyCategories}</p>
           ) : (
             <div className="category-list">
               {categories.map((cat) => {
@@ -293,20 +354,20 @@ export default function App(): React.JSX.Element {
               disabled={!current || busy || selectedCats.length === 0}
               onClick={() => void runMulti()}
             >
-              确认分类（{selectedCats.length}）
+              {interpolate(t.confirmClassify, { n: selectedCats.length })}
             </button>
           )}
 
           {mode === 'single' && (
             <p className="empty-hint" style={{ marginTop: 8 }}>
-              单类模式：点击分类即重命名并移动文件。
+              {t.singleHint}
             </p>
           )}
         </aside>
       </div>
 
       <footer className={statusClass}>
-        {playError ? `${playError} · ${status.text}` : status.text}
+        {playFailed ? `${t.playError} · ${statusLine}` : statusLine}
       </footer>
     </div>
   )

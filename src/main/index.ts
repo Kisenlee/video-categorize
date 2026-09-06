@@ -1,10 +1,23 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol, net, Menu } from 'electron'
-import { join, basename, extname, parse } from 'path'
-import { pathToFileURL } from 'url'
-import { readdir, rename, copyFile, unlink, access, constants } from 'fs/promises'
-import { existsSync } from 'fs'
+import { app, BrowserWindow, dialog, ipcMain, protocol, Menu } from 'electron'
+import { join, basename, extname, parse, isAbsolute } from 'path'
+import { readdir, rename, copyFile, unlink, access, stat, constants } from 'fs/promises'
+import { createReadStream, existsSync } from 'fs'
+import { Readable } from 'stream'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { VIDEO_EXTENSIONS, type VideoItem, type CategoryItem, type ClassifyResult } from '../shared/types'
+
+type UiLocale = 'zh' | 'en'
+
+const WINDOW_TITLE: Record<UiLocale, string> = {
+  zh: '视频分类助手',
+  en: 'Video Classifier'
+}
+
+let uiLocale: UiLocale = 'zh'
+
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport')
+}
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -30,7 +43,7 @@ function createWindow(): void {
     minWidth: 1100,
     minHeight: 700,
     show: false,
-    title: '视频分类助手',
+    title: WINDOW_TITLE[uiLocale],
     backgroundColor: '#12151a',
     autoHideMenuBar: true,
     webPreferences: {
@@ -169,7 +182,7 @@ async function classifySingle(
   try {
     await ensureSourceExists(sourcePath)
     if (!existsSync(categoryPath)) {
-      return { ok: false, error: '分类文件夹不存在' }
+      return { ok: false, error: 'categoryMissing' }
     }
 
     const ext = extname(sourcePath)
@@ -203,12 +216,12 @@ async function classifyMulti(
   try {
     await ensureSourceExists(sourcePath)
     if (categoryPaths.length === 0) {
-      return { ok: false, error: '请至少选择一个分类' }
+      return { ok: false, error: 'noCategorySelected' }
     }
 
     for (const cat of categoryPaths) {
       if (!existsSync(cat)) {
-        return { ok: false, error: `分类文件夹不存在: ${basename(cat)}` }
+        return { ok: false, error: `categoryMissing:${basename(cat)}` }
       }
     }
 
@@ -233,7 +246,7 @@ async function classifyMulti(
 function registerIpc(): void {
   ipcMain.handle('dialog:selectSourceFolder', async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
-      title: '选择待处理文件夹',
+      title: uiLocale === 'zh' ? '选择待处理文件夹' : 'Select inbox folder',
       properties: ['openDirectory']
     })
     if (result.canceled || result.filePaths.length === 0) return null
@@ -242,7 +255,7 @@ function registerIpc(): void {
 
   ipcMain.handle('dialog:selectTargetFolder', async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
-      title: '选择目标文件夹',
+      title: uiLocale === 'zh' ? '选择目标文件夹' : 'Select target folder',
       properties: ['openDirectory']
     })
     if (result.canceled || result.filePaths.length === 0) return null
@@ -288,19 +301,148 @@ function registerIpc(): void {
     const encoded = Buffer.from(filePath, 'utf8').toString('base64url')
     return `media://local/${encoded}`
   })
+
+  ipcMain.handle('app:setLocale', async (_e, locale: UiLocale) => {
+    if (locale !== 'zh' && locale !== 'en') return
+    uiLocale = locale
+    mainWindow?.setTitle(WINDOW_TITLE[locale])
+  })
+}
+
+function mimeForExt(filePath: string): string {
+  switch (extname(filePath).toLowerCase()) {
+    case '.mp4':
+    case '.m4v':
+      return 'video/mp4'
+    case '.webm':
+      return 'video/webm'
+    case '.mkv':
+      return 'video/x-matroska'
+    case '.mov':
+      return 'video/quicktime'
+    case '.avi':
+      return 'video/x-msvideo'
+    case '.wmv':
+      return 'video/x-ms-wmv'
+    case '.flv':
+      return 'video/x-flv'
+    default:
+      return 'application/octet-stream'
+  }
+}
+
+function parseByteRange(
+  rangeHeader: string | null,
+  size: number
+): { start: number; end: number; partial: boolean } | { unsatisfiable: true } {
+  if (!rangeHeader) {
+    return { start: 0, end: Math.max(0, size - 1), partial: false }
+  }
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim())
+  if (!match) {
+    return { start: 0, end: Math.max(0, size - 1), partial: false }
+  }
+  const startStr = match[1]
+  const endStr = match[2]
+  let start: number
+  let end: number
+  if (!startStr && endStr) {
+    const suffix = Number(endStr)
+    if (!Number.isFinite(suffix) || suffix <= 0) return { unsatisfiable: true }
+    start = Math.max(0, size - suffix)
+    end = size - 1
+  } else {
+    start = startStr ? Number(startStr) : 0
+    end = endStr ? Number(endStr) : size - 1
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= size || end < start) {
+    return { unsatisfiable: true }
+  }
+  end = Math.min(end, size - 1)
+  return { start, end, partial: true }
+}
+
+function decodeMediaPath(requestUrl: string): string | null {
+  try {
+    const url = new URL(requestUrl)
+    const encoded = url.pathname.replace(/^\/+/, '')
+    if (!encoded) return null
+    const filePath = Buffer.from(encoded, 'base64url').toString('utf8')
+    if (!filePath) return null
+    if (!isAbsolute(filePath) && !filePath.startsWith('\\\\') && !filePath.startsWith('//')) {
+      return null
+    }
+    return filePath
+  } catch {
+    return null
+  }
+}
+
+async function handleMediaRequest(request: Request): Promise<Response> {
+  const filePath = decodeMediaPath(request.url)
+  if (!filePath) {
+    return new Response('Not found', { status: 404 })
+  }
+
+  let fileStat: Awaited<ReturnType<typeof stat>>
+  try {
+    fileStat = await stat(filePath)
+  } catch {
+    return new Response('Not found', { status: 404 })
+  }
+  if (!fileStat.isFile()) {
+    return new Response('Not found', { status: 404 })
+  }
+
+  const size = fileStat.size
+  const mime = mimeForExt(filePath)
+  if (size === 0) {
+    return new Response(null, {
+      status: 200,
+      headers: {
+        'Content-Type': mime,
+        'Content-Length': '0',
+        'Accept-Ranges': 'bytes'
+      }
+    })
+  }
+
+  const range = parseByteRange(request.headers.get('Range'), size)
+  if ('unsatisfiable' in range) {
+    return new Response(null, {
+      status: 416,
+      headers: {
+        'Content-Range': `bytes */${size}`,
+        'Accept-Ranges': 'bytes'
+      }
+    })
+  }
+
+  const { start, end, partial } = range
+  const chunkSize = end - start + 1
+  const nodeStream = createReadStream(filePath, { start, end })
+  const abort = (): void => {
+    nodeStream.destroy()
+  }
+  request.signal.addEventListener('abort', abort)
+  nodeStream.once('close', () => {
+    request.signal.removeEventListener('abort', abort)
+  })
+
+  const body = Readable.toWeb(nodeStream) as never
+  return new Response(body, {
+    status: partial ? 206 : 200,
+    headers: {
+      'Content-Type': mime,
+      'Content-Length': String(chunkSize),
+      'Accept-Ranges': 'bytes',
+      ...(partial ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {})
+    }
+  })
 }
 
 app.whenReady().then(() => {
-  protocol.handle('media', (request) => {
-    try {
-      const url = new URL(request.url)
-      const encoded = url.pathname.replace(/^\/+/, '')
-      const filePath = Buffer.from(encoded, 'base64url').toString('utf8')
-      return net.fetch(pathToFileURL(filePath).toString())
-    } catch {
-      return new Response('Not found', { status: 404 })
-    }
-  })
+  protocol.handle('media', (request) => handleMediaRequest(request))
 
   registerIpc()
   createWindow()

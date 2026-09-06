@@ -6,7 +6,7 @@
   "author": "video-classifier",
   "license": "MIT",
   "scripts": {
-    "dev": "electron-vite dev -- --no-sandbox --disable-gpu",
+    "dev": "electron-vite dev -- --no-sandbox",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "dist:win": "npm run build && electron-builder --win --x64",

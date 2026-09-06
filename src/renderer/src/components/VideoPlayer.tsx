@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { useI18n } from '../i18n'
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
@@ -15,16 +16,22 @@ function formatTime(seconds: number): string {
 interface VideoPlayerProps {
   src: string | null
   onDuration: (seconds: number | null) => void
-  onError: (message: string | null) => void
+  onPlayFailed: (failed: boolean) => void
 }
 
-export default function VideoPlayer({ src, onDuration, onError }: VideoPlayerProps): React.JSX.Element {
+export default function VideoPlayer({
+  src,
+  onDuration,
+  onPlayFailed
+}: VideoPlayerProps): React.JSX.Element {
+  const { t } = useI18n()
   const videoRef = useRef<HTMLVideoElement>(null)
   const [current, setCurrent] = useState(0)
   const [duration, setDuration] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [volume, setVolume] = useState(0.85)
   const [muted, setMuted] = useState(false)
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     const video = videoRef.current
@@ -38,6 +45,8 @@ export default function VideoPlayer({ src, onDuration, onError }: VideoPlayerPro
     setCurrent(0)
     setDuration(0)
     setPlaying(false)
+    setFailed(false)
+    onPlayFailed(false)
     onDuration(null)
 
     if (!src) {
@@ -52,26 +61,37 @@ export default function VideoPlayer({ src, onDuration, onError }: VideoPlayerPro
       () => setPlaying(true),
       () => setPlaying(false)
     )
-  }, [src, onDuration])
+  }, [src, onDuration, onPlayFailed])
+
+  const markFailed = useCallback(() => {
+    setFailed(true)
+    onPlayFailed(true)
+  }, [onPlayFailed])
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current
     if (!video || !src) return
     if (video.paused) {
-      void video.play().then(() => setPlaying(true))
+      void video.play().then(
+        () => setPlaying(true),
+        () => markFailed()
+      )
     } else {
       video.pause()
       setPlaying(false)
     }
-  }, [src])
+  }, [src, markFailed])
 
-  const seekBy = useCallback((delta: number) => {
-    const video = videoRef.current
-    if (!video || !src) return
-    const next = Math.min(Math.max(0, video.currentTime + delta), video.duration || 0)
-    video.currentTime = next
-    setCurrent(next)
-  }, [src])
+  const seekBy = useCallback(
+    (delta: number) => {
+      const video = videoRef.current
+      if (!video || !src) return
+      const next = Math.min(Math.max(0, video.currentTime + delta), video.duration || 0)
+      video.currentTime = next
+      setCurrent(next)
+    },
+    [src]
+  )
 
   const onSeek = (value: number): void => {
     const video = videoRef.current
@@ -84,29 +104,33 @@ export default function VideoPlayer({ src, onDuration, onError }: VideoPlayerPro
     <>
       <div className="video-stage">
         {src ? (
-          <video
-            ref={videoRef}
-            onTimeUpdate={() => {
-              const v = videoRef.current
-              if (v) setCurrent(v.currentTime)
-            }}
-            onLoadedMetadata={() => {
-              const v = videoRef.current
-              if (!v) return
-              setDuration(v.duration)
-              onDuration(v.duration)
-              v.currentTime = 0
-            }}
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
-            onEnded={() => setPlaying(false)}
-            onError={() => {
-              onError('无法播放该视频格式（浏览器引擎不支持）。仍可重命名并分类。')
-            }}
-            onCanPlay={() => onError(null)}
-          />
+          <>
+            <video
+              ref={videoRef}
+              onTimeUpdate={() => {
+                const v = videoRef.current
+                if (v) setCurrent(v.currentTime)
+              }}
+              onLoadedMetadata={() => {
+                const v = videoRef.current
+                if (!v) return
+                setDuration(v.duration)
+                onDuration(v.duration)
+                v.currentTime = 0
+              }}
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onEnded={() => setPlaying(false)}
+              onError={markFailed}
+              onCanPlay={() => {
+                setFailed(false)
+                onPlayFailed(false)
+              }}
+            />
+            {failed && <div className="video-error">{t.playError}</div>}
+          </>
         ) : (
-          <div className="video-empty">选择待处理文件夹后，将在此播放视频</div>
+          <div className="video-empty">{t.videoEmpty}</div>
         )}
       </div>
 
@@ -132,7 +156,7 @@ export default function VideoPlayer({ src, onDuration, onError }: VideoPlayerPro
             −10s
           </button>
           <button type="button" className="ctrl-btn" disabled={!src} onClick={togglePlay}>
-            {playing ? '暂停' : '播放'}
+            {playing ? t.pause : t.play}
           </button>
           <button type="button" className="ctrl-btn" disabled={!src} onClick={() => seekBy(10)}>
             +10s
@@ -150,7 +174,7 @@ export default function VideoPlayer({ src, onDuration, onError }: VideoPlayerPro
                 setMuted(v.muted)
               }}
             >
-              {muted || volume === 0 ? '静音' : '音量'}
+              {muted || volume === 0 ? t.mute : t.volume}
             </button>
             <input
               type="range"

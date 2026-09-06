@@ -40,7 +40,9 @@ const api = {
     categoryPaths: string[]
   }): Promise<ClassifyResult> => ipcRenderer.invoke('classify:multi', payload),
 
-  mediaToUrl: (filePath: string): Promise<string> => ipcRenderer.invoke('media:toUrl', filePath)
+  mediaToUrl: (filePath: string): Promise<string> => ipcRenderer.invoke('media:toUrl', filePath),
+
+  setLocale: (locale: 'zh' | 'en'): Promise<void> => ipcRenderer.invoke('app:setLocale', locale)
 }
 
 contextBridge.exposeInMainWorld('api', api)
