@@ -28,3 +28,23 @@ export interface ClassifyResult {
   error?: string
   destinations?: string[]
 }
+
+export interface PlayerBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface PlayerState {
+  ready: boolean
+  path: string | null
+  time: number
+  duration: number
+  paused: boolean
+  eof: boolean
+  volume: number
+  muted: boolean
+  error: string | null
+  mpvAvailable: boolean
+}

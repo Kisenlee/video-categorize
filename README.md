@@ -6,14 +6,24 @@ Windows desktop helper for classifying local / NAS videos. Play files from an in
 
 ## 下载使用 / Download (recommended)
 
-打包命令会生成 / Build artifacts:
+从 GitHub Releases 下载已打包文件（推荐）：
 
-- `release/VideoClassifier-1.0.0-portable.exe` — 便携版，双击即可运行 / portable, double-click to run
-- `release/VideoClassifier-1.0.0-win-x64.zip` — 解压后运行 `VideoClassifier.exe` / unzip and run `VideoClassifier.exe`
+Download prebuilt binaries from GitHub Releases:
+
+**https://github.com/Kisenlee/video-categorize/releases**
+
+每个版本通常包含 / Each release typically includes:
+
+- `VideoClassifier-x.y.z-portable.exe` — 便携版，双击即可运行 / portable, double-click to run
+- `VideoClassifier-x.y.z-win-x64.zip` — 解压后运行 `VideoClassifier.exe` / unzip and run `VideoClassifier.exe`
 
 在 Windows 上双击即可；若被 SmartScreen 拦截，选择「仍要运行」。
 
 On Windows, double-click to launch. If SmartScreen blocks it, choose **Run anyway**.
+
+打 `v*` 标签并推送后，GitHub Actions 会自动构建并发布上述文件。
+
+Pushing a `v*` tag triggers GitHub Actions to build and publish those assets automatically.
 
 ## 功能 / Features
 
@@ -25,25 +35,34 @@ On Windows, double-click to launch. If SmartScreen blocks it, choose **Run anywa
 - 单/复类模式在视频间保持 / Single/Multi mode persists across videos
 - 同名冲突自动追加 `_1`、`_2`… / Name conflicts append `_1`, `_2`, …
 - 顶栏 **中文 / EN** 切换全部界面，语言保存在 `localStorage` / Top-bar language switch; saved in `localStorage`
-- NAS / UNC 路径用 `media` 协议 Range 流式读取；Windows 启用 HEVC 硬件解码 / NAS/UNC playback uses Range streaming; Windows HEVC hardware decode is enabled
+- **内置 mpv 播放引擎**（自带 HEVC/H.265 等编解码，不依赖浏览器扩展） / Bundled **mpv** engine (HEVC/H.265 without browser codec packs)
 - 无法播放时仍可改名并分类 / If playback fails, you can still rename and classify
 
 ## 开发运行 / Develop
 
 需要 Node.js 18+。 / Requires Node.js 18+.
 
+首次（或打包前）下载 Windows mpv 运行时到 `vendor/mpv/`：
+
+First time (and before packaging), download the Windows mpv runtime into `vendor/mpv/`:
+
 ```bash
 npm install
+npm run fetch:mpv
 npm run dev
 ```
 
-打包 Windows 可执行文件 / Build a Windows executable:
+也可手动安装 mpv，并设置环境变量 `MPV_PATH` 指向 `mpv.exe`。
+
+You can also install mpv yourself and set `MPV_PATH` to `mpv.exe`.
+
+打包 Windows 可执行文件（会自动 `fetch:mpv`） / Build a Windows executable (auto-runs `fetch:mpv`):
 
 ```bash
 npm run dist:win
 ```
 
-产物在 `release/`。成功后应看到类似：
+产物在 `release/`。成功后应看到：
 
 After a successful build you should see:
 
@@ -66,11 +85,11 @@ set VIDEO_CLASSIFIER_POLL=1
 VideoClassifier-1.0.0-portable.exe
 ```
 
-### 播放提示 / Playback notes
+### 播放说明 / Playback notes
 
-播放依赖 Chromium 编解码能力。HEVC/H.265 在 Windows 上通常需要 Microsoft Store 的「HEVC 视频扩展」。无法播放时仍可改名并分类。
+播放由 **mpv** 完成（`--hwdec=auto`），可直接播 HEVC/H.265、常见容器与 NAS/UNC 路径，无需 Microsoft Store 的 HEVC 扩展。
 
-Playback uses Chromium codecs. HEVC/H.265 on Windows usually needs **HEVC Video Extensions** from the Microsoft Store. If a file cannot play, you can still rename and classify it.
+Playback uses **mpv** (`--hwdec=auto`), so HEVC/H.265 and common containers (including NAS/UNC paths) work without Microsoft Store HEVC extensions.
 
 ## 支持的视频扩展名 / Supported extensions
 

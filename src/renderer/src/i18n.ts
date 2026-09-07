@@ -45,8 +45,9 @@ const zh = {
   statusMoving: '正在移动到「{name}」…',
   statusCopying: '正在复制到 {n} 个分类…',
   classifyFailed: '分类失败',
-  playError:
-    '无法播放该视频（常见原因：HEVC/H.265 未安装扩展，或 NAS/UNC 路径读取失败）。仍可在左侧改名并在右侧分类。Windows 可在 Microsoft Store 安装「HEVC 视频扩展」。',
+  playError: '无法播放该视频。仍可在左侧改名并在右侧分类。',
+  mpvMissing: '未找到 mpv 播放器。请运行 npm run fetch:mpv，或设置 MPV_PATH 指向 mpv.exe。仍可改名并分类。',
+  mpvStartFailed: 'mpv 启动失败。请确认已打包/下载 mpv 运行时。仍可改名并分类。',
   videoEmpty: '选择待处理文件夹后，将在此播放视频',
   pause: '暂停',
   play: '播放',
@@ -94,8 +95,11 @@ const en: Messages = {
   statusMoving: 'Moving to “{name}”…',
   statusCopying: 'Copying to {n} categories…',
   classifyFailed: 'Classify failed',
-  playError:
-    'Cannot play this video (often HEVC/H.265 without the codec pack, or a NAS/UNC path read failure). You can still rename it on the left and classify on the right. On Windows, install “HEVC Video Extensions” from the Microsoft Store.',
+  playError: 'Cannot play this video. You can still rename it on the left and classify on the right.',
+  mpvMissing:
+    'mpv player not found. Run npm run fetch:mpv, or set MPV_PATH to mpv.exe. You can still rename and classify.',
+  mpvStartFailed:
+    'Failed to start mpv. Make sure the mpv runtime is downloaded/bundled. You can still rename and classify.',
   videoEmpty: 'Select an inbox folder to play videos here',
   pause: 'Pause',
   play: 'Play',

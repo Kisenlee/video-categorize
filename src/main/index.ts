@@ -5,6 +5,7 @@ import { createReadStream, existsSync } from 'fs'
 import { Readable } from 'stream'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { VIDEO_EXTENSIONS, type VideoItem, type CategoryItem, type ClassifyResult } from '../shared/types'
+import { MpvPlayer, type PlayerBounds } from './mpv-player'
 
 type UiLocale = 'zh' | 'en'
 
@@ -14,10 +15,6 @@ const WINDOW_TITLE: Record<UiLocale, string> = {
 }
 
 let uiLocale: UiLocale = 'zh'
-
-if (process.platform === 'win32') {
-  app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport')
-}
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -35,6 +32,7 @@ protocol.registerSchemesAsPrivileged([
 let mainWindow: BrowserWindow | null = null
 let categoryWatcher: FSWatcher | null = null
 let watchedTargetDir: string | null = null
+let mpvPlayer: MpvPlayer | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -56,8 +54,19 @@ function createWindow(): void {
 
   Menu.setApplicationMenu(null)
 
+  mpvPlayer = new MpvPlayer(mainWindow)
+  mpvPlayer.onState = (state) => {
+    mainWindow?.webContents.send('player:state', state)
+  }
+
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+  })
+
+  mainWindow.on('closed', () => {
+    void mpvPlayer?.destroy()
+    mpvPlayer = null
+    mainWindow = null
   })
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
@@ -245,19 +254,23 @@ async function classifyMulti(
 
 function registerIpc(): void {
   ipcMain.handle('dialog:selectSourceFolder', async () => {
+    await mpvPlayer?.suspendForUi()
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: uiLocale === 'zh' ? '选择待处理文件夹' : 'Select inbox folder',
       properties: ['openDirectory']
     })
+    await mpvPlayer?.resumeAfterUi()
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0]
   })
 
   ipcMain.handle('dialog:selectTargetFolder', async () => {
+    await mpvPlayer?.suspendForUi()
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: uiLocale === 'zh' ? '选择目标文件夹' : 'Select target folder',
       properties: ['openDirectory']
     })
+    await mpvPlayer?.resumeAfterUi()
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0]
   })
@@ -306,6 +319,57 @@ function registerIpc(): void {
     if (locale !== 'zh' && locale !== 'en') return
     uiLocale = locale
     mainWindow?.setTitle(WINDOW_TITLE[locale])
+  })
+
+  ipcMain.handle('player:getState', async () => mpvPlayer?.getState() ?? null)
+
+  ipcMain.handle('player:setBounds', async (_e, bounds: PlayerBounds) => {
+    mpvPlayer?.setBounds(bounds)
+  })
+
+  ipcMain.handle('player:load', async (_e, filePath: string) => {
+    await mpvPlayer?.load(filePath)
+    return mpvPlayer?.getState() ?? null
+  })
+
+  ipcMain.handle('player:stop', async () => {
+    await mpvPlayer?.stop()
+  })
+
+  ipcMain.handle('player:unloadForClassify', async () => {
+    await mpvPlayer?.unloadForClassify()
+  })
+
+  ipcMain.handle('player:play', async () => {
+    await mpvPlayer?.play()
+  })
+
+  ipcMain.handle('player:pause', async () => {
+    await mpvPlayer?.pause()
+  })
+
+  ipcMain.handle('player:togglePause', async () => {
+    await mpvPlayer?.togglePause()
+  })
+
+  ipcMain.handle('player:seek', async (_e, seconds: number) => {
+    await mpvPlayer?.seek(seconds)
+  })
+
+  ipcMain.handle('player:seekBy', async (_e, delta: number) => {
+    await mpvPlayer?.seekBy(delta)
+  })
+
+  ipcMain.handle('player:setVolume', async (_e, volume01: number) => {
+    await mpvPlayer?.setVolume(volume01)
+  })
+
+  ipcMain.handle('player:setMuted', async (_e, muted: boolean) => {
+    await mpvPlayer?.setMuted(muted)
+  })
+
+  ipcMain.handle('player:setVisible', async (_e, visible: boolean) => {
+    await mpvPlayer?.setVisible(visible)
   })
 }
 
@@ -454,5 +518,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   void stopCategoryWatch()
+  void mpvPlayer?.destroy()
+  mpvPlayer = null
   if (process.platform !== 'darwin') app.quit()
 })

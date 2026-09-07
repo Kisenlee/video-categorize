@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import type { PlayerState } from '../../../shared/types'
 import { useI18n } from '../i18n'
 
 function formatTime(seconds: number): string {
@@ -13,124 +14,155 @@ function formatTime(seconds: number): string {
   return `${m}:${String(sec).padStart(2, '0')}`
 }
 
+function playErrorText(
+  error: string | null,
+  t: ReturnType<typeof useI18n>['t']
+): string {
+  if (error === 'mpvMissing') return t.mpvMissing
+  if (error === 'mpvIpcFailed' || error === 'mpvExited') return t.mpvStartFailed
+  return t.playError
+}
+
 interface VideoPlayerProps {
-  src: string | null
+  filePath: string | null
+  obscured?: boolean
   onDuration: (seconds: number | null) => void
   onPlayFailed: (failed: boolean) => void
 }
 
 export default function VideoPlayer({
-  src,
+  filePath,
+  obscured = false,
   onDuration,
   onPlayFailed
 }: VideoPlayerProps): React.JSX.Element {
   const { t } = useI18n()
-  const videoRef = useRef<HTMLVideoElement>(null)
+  const stageRef = useRef<HTMLDivElement>(null)
   const [current, setCurrent] = useState(0)
   const [duration, setDuration] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [volume, setVolume] = useState(0.85)
   const [muted, setMuted] = useState(false)
   const [failed, setFailed] = useState(false)
+  const [errorKey, setErrorKey] = useState<string | null>(null)
+
+  const syncBounds = useCallback(() => {
+    const el = stageRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    void window.api.playerSetBounds({
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height
+    })
+  }, [])
 
   useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
-    video.volume = volume
-  }, [volume])
+    const off = window.api.onPlayerState((state: PlayerState) => {
+      setCurrent(typeof state.time === 'number' ? state.time : 0)
+      if (typeof state.duration === 'number' && state.duration > 0) {
+        setDuration(state.duration)
+        onDuration(state.duration)
+      }
+      setPlaying(!state.paused && Boolean(state.path))
+      setVolume(Math.max(0, Math.min(1, (state.volume ?? 0) / 100)))
+      setMuted(Boolean(state.muted))
+      const err = state.error
+      setErrorKey(err)
+      setFailed(Boolean(err))
+      onPlayFailed(Boolean(err))
+    })
+    return off
+  }, [onDuration, onPlayFailed])
 
   useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
+    syncBounds()
+    const onResize = (): void => syncBounds()
+    window.addEventListener('resize', onResize)
+    const ro = new ResizeObserver(() => syncBounds())
+    if (stageRef.current) ro.observe(stageRef.current)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      ro.disconnect()
+    }
+  }, [syncBounds])
+
+  useEffect(() => {
     setCurrent(0)
     setDuration(0)
     setPlaying(false)
     setFailed(false)
+    setErrorKey(null)
     onPlayFailed(false)
     onDuration(null)
 
-    if (!src) {
-      video.removeAttribute('src')
-      video.load()
+    if (!filePath) {
+      void window.api.playerStop()
       return
     }
 
-    video.src = src
-    video.currentTime = 0
-    void video.play().then(
-      () => setPlaying(true),
-      () => setPlaying(false)
-    )
-  }, [src, onDuration, onPlayFailed])
+    syncBounds()
+    let cancelled = false
+    void window.api.playerLoad(filePath).then((state) => {
+      if (cancelled || !state) return
+      if (state.error) {
+        setErrorKey(state.error)
+        setFailed(true)
+        onPlayFailed(true)
+      }
+      if (state.duration > 0) {
+        setDuration(state.duration)
+        onDuration(state.duration)
+      }
+      setPlaying(!state.paused)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [filePath, onDuration, onPlayFailed, syncBounds])
 
-  const markFailed = useCallback(() => {
-    setFailed(true)
-    onPlayFailed(true)
-  }, [onPlayFailed])
+  useEffect(() => {
+    // While classifying, keep overlay hidden; after load of next file, load() repositions itself.
+    if (obscured) {
+      void window.api.playerSetVisible(false)
+    }
+  }, [obscured])
+
+  useEffect(() => {
+    return () => {
+      void window.api.playerStop()
+    }
+  }, [])
 
   const togglePlay = useCallback(() => {
-    const video = videoRef.current
-    if (!video || !src) return
-    if (video.paused) {
-      void video.play().then(
-        () => setPlaying(true),
-        () => markFailed()
-      )
-    } else {
-      video.pause()
-      setPlaying(false)
-    }
-  }, [src, markFailed])
+    if (!filePath) return
+    void window.api.playerTogglePause()
+  }, [filePath])
 
   const seekBy = useCallback(
     (delta: number) => {
-      const video = videoRef.current
-      if (!video || !src) return
-      const next = Math.min(Math.max(0, video.currentTime + delta), video.duration || 0)
-      video.currentTime = next
-      setCurrent(next)
+      if (!filePath) return
+      void window.api.playerSeekBy(delta)
     },
-    [src]
+    [filePath]
   )
 
   const onSeek = (value: number): void => {
-    const video = videoRef.current
-    if (!video) return
-    video.currentTime = value
+    if (!filePath) return
+    void window.api.playerSeek(value)
     setCurrent(value)
   }
 
   return (
     <>
-      <div className="video-stage">
-        {src ? (
-          <>
-            <video
-              ref={videoRef}
-              onTimeUpdate={() => {
-                const v = videoRef.current
-                if (v) setCurrent(v.currentTime)
-              }}
-              onLoadedMetadata={() => {
-                const v = videoRef.current
-                if (!v) return
-                setDuration(v.duration)
-                onDuration(v.duration)
-                v.currentTime = 0
-              }}
-              onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
-              onEnded={() => setPlaying(false)}
-              onError={markFailed}
-              onCanPlay={() => {
-                setFailed(false)
-                onPlayFailed(false)
-              }}
-            />
-            {failed && <div className="video-error">{t.playError}</div>}
-          </>
-        ) : (
+      <div className="video-stage" ref={stageRef}>
+        {!filePath ? (
           <div className="video-empty">{t.videoEmpty}</div>
+        ) : failed ? (
+          <div className="video-error">{playErrorText(errorKey, t)}</div>
+        ) : (
+          <div className="video-native-slot" aria-hidden />
         )}
       </div>
 
@@ -143,7 +175,7 @@ export default function VideoPlayer({
             max={duration || 0}
             step={0.1}
             value={Math.min(current, duration || 0)}
-            disabled={!src || !duration}
+            disabled={!filePath || !duration}
             onChange={(e) => onSeek(Number(e.target.value))}
           />
           <span className="time" style={{ textAlign: 'right' }}>
@@ -152,13 +184,13 @@ export default function VideoPlayer({
         </div>
 
         <div className="btn-row">
-          <button type="button" className="ctrl-btn" disabled={!src} onClick={() => seekBy(-10)}>
+          <button type="button" className="ctrl-btn" disabled={!filePath} onClick={() => seekBy(-10)}>
             −10s
           </button>
-          <button type="button" className="ctrl-btn" disabled={!src} onClick={togglePlay}>
+          <button type="button" className="ctrl-btn" disabled={!filePath} onClick={togglePlay}>
             {playing ? t.pause : t.play}
           </button>
-          <button type="button" className="ctrl-btn" disabled={!src} onClick={() => seekBy(10)}>
+          <button type="button" className="ctrl-btn" disabled={!filePath} onClick={() => seekBy(10)}>
             +10s
           </button>
 
@@ -166,12 +198,11 @@ export default function VideoPlayer({
             <button
               type="button"
               className="ctrl-btn"
-              disabled={!src}
+              disabled={!filePath}
               onClick={() => {
-                const v = videoRef.current
-                if (!v) return
-                v.muted = !v.muted
-                setMuted(v.muted)
+                const next = !muted
+                setMuted(next)
+                void window.api.playerSetMuted(next)
               }}
             >
               {muted || volume === 0 ? t.mute : t.volume}
@@ -182,16 +213,12 @@ export default function VideoPlayer({
               max={1}
               step={0.01}
               value={muted ? 0 : volume}
-              disabled={!src}
+              disabled={!filePath}
               onChange={(e) => {
                 const next = Number(e.target.value)
                 setVolume(next)
                 setMuted(next === 0)
-                const v = videoRef.current
-                if (v) {
-                  v.volume = next
-                  v.muted = next === 0
-                }
+                void window.api.playerSetVolume(next)
               }}
             />
           </div>

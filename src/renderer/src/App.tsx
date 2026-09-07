@@ -48,10 +48,10 @@ export default function App(): React.JSX.Element {
   const [selectedCats, setSelectedCats] = useState<string[]>([])
   const [editName, setEditName] = useState('')
   const [duration, setDuration] = useState<number | null>(null)
-  const [mediaUrl, setMediaUrl] = useState<string | null>(null)
   const [status, setStatus] = useState<Status>({ type: 'idle', key: 'statusStart' })
   const [busy, setBusy] = useState(false)
   const [playFailed, setPlayFailed] = useState(false)
+  const [playbackKey, setPlaybackKey] = useState(0)
 
   const current = videos[index] ?? null
   const total = videos.length
@@ -103,7 +103,6 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!current) {
       setEditName('')
-      setMediaUrl(null)
       setDuration(null)
       setPlayFailed(false)
       return
@@ -112,13 +111,6 @@ export default function App(): React.JSX.Element {
     setDuration(null)
     setPlayFailed(false)
     setSelectedCats([])
-    let cancelled = false
-    void window.api.mediaToUrl(current.path).then((url) => {
-      if (!cancelled) setMediaUrl(url)
-    })
-    return () => {
-      cancelled = true
-    }
   }, [current?.path])
 
   const advanceAfterClassify = useCallback(
@@ -128,10 +120,12 @@ export default function App(): React.JSX.Element {
       setVideos(list)
       if (list.length === 0) {
         setIndex(0)
+        setPlaybackKey((k) => k + 1)
         setStatus({ type: 'ok', key: 'statusDone' })
         return
       }
       setIndex((prev) => Math.min(prev, list.length - 1))
+      setPlaybackKey((k) => k + 1)
       setStatus({
         type: 'ok',
         key: 'statusRemoved',
@@ -143,10 +137,12 @@ export default function App(): React.JSX.Element {
 
   const runSingle = async (category: CategoryItem): Promise<void> => {
     if (!current || busy) return
+    const sourcePath = current.path
     setBusy(true)
     setStatus({ type: 'idle', key: 'statusMoving', name: category.name })
+    await window.api.playerUnloadForClassify()
     const result = await window.api.classifySingle({
-      sourcePath: current.path,
+      sourcePath,
       newBasename: editName,
       categoryPath: category.path
     })
@@ -157,17 +153,20 @@ export default function App(): React.JSX.Element {
         key: 'raw',
         text: formatClassifyError(result.error || 'classifyFailed', t)
       })
+      await window.api.playerLoad(sourcePath)
       return
     }
-    await advanceAfterClassify(current.path)
+    await advanceAfterClassify(sourcePath)
   }
 
   const runMulti = async (): Promise<void> => {
     if (!current || busy || selectedCats.length === 0) return
+    const sourcePath = current.path
     setBusy(true)
     setStatus({ type: 'idle', key: 'statusCopying', n: selectedCats.length })
+    await window.api.playerUnloadForClassify()
     const result = await window.api.classifyMulti({
-      sourcePath: current.path,
+      sourcePath,
       newBasename: editName,
       categoryPaths: selectedCats
     })
@@ -178,9 +177,10 @@ export default function App(): React.JSX.Element {
         key: 'raw',
         text: formatClassifyError(result.error || 'classifyFailed', t)
       })
+      await window.api.playerLoad(sourcePath)
       return
     }
-    await advanceAfterClassify(current.path)
+    await advanceAfterClassify(sourcePath)
   }
 
   const toggleMultiCat = (path: string): void => {
@@ -279,7 +279,13 @@ export default function App(): React.JSX.Element {
         </aside>
 
         <section className="panel-center" style={{ position: 'relative' }}>
-          <VideoPlayer src={mediaUrl} onDuration={setDuration} onPlayFailed={setPlayFailed} />
+          <VideoPlayer
+            key={playbackKey}
+            filePath={current?.path ?? null}
+            obscured={busy}
+            onDuration={setDuration}
+            onPlayFailed={setPlayFailed}
+          />
           {busy && <div className="busy-overlay">{t.processing}</div>}
         </section>
 
