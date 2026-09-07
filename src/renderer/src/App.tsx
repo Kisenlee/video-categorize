@@ -75,6 +75,7 @@ export default function App(): React.JSX.Element {
   const [status, setStatus] = useState<Status>({ type: 'idle', key: 'statusStart' })
   const [busy, setBusy] = useState(false)
   const [playFailed, setPlayFailed] = useState(false)
+  const [playErrorMsg, setPlayErrorMsg] = useState<string | null>(null)
   const [playbackKey, setPlaybackKey] = useState(0)
   const [keyBinds, setKeyBinds] = useState<Partial<Record<BindableKey, string>>>({})
   const [bindingTarget, setBindingTarget] = useState<string | null>(null)
@@ -176,13 +177,54 @@ export default function App(): React.JSX.Element {
       setEditName('')
       setDuration(null)
       setPlayFailed(false)
+      setPlayErrorMsg(null)
       return
     }
     setEditName(current.basename)
     setDuration(null)
     setPlayFailed(false)
+    setPlayErrorMsg(null)
     setSelectedCats([])
   }, [current?.path])
+
+  const onPlayFailed = useCallback((failed: boolean, message?: string | null) => {
+    setPlayFailed(failed)
+    setPlayErrorMsg(failed ? message ?? t.playError : null)
+  }, [t.playError])
+
+  // Inbox is not watched; if the user deletes it externally, refresh on focus.
+  useEffect(() => {
+    const refreshIfNeeded = (): void => {
+      const dir = sourceDirRef.current
+      if (!dir || busyRef.current) return
+      void (async () => {
+        const dirOk = await window.api.pathExists(dir)
+        if (!dirOk) {
+          setVideos([])
+          setIndex(0)
+          setStatus({ type: 'error', key: 'raw', text: t.sourceMissing })
+          return
+        }
+        const list = await window.api.scanVideos(dir)
+        setVideos((prev) => {
+          if (
+            list.length === prev.length &&
+            list.every((v, i) => v.path === prev[i]?.path)
+          ) {
+            return prev
+          }
+          return list
+        })
+        if (list.length > 0) {
+          setIndex((i) => Math.min(i, list.length - 1))
+        } else {
+          setIndex(0)
+        }
+      })()
+    }
+    window.addEventListener('focus', refreshIfNeeded)
+    return () => window.removeEventListener('focus', refreshIfNeeded)
+  }, [t.sourceMissing])
 
   const advanceAfterClassify = useCallback(
     async (removedPath: string) => {
@@ -551,7 +593,7 @@ export default function App(): React.JSX.Element {
             filePath={current?.path ?? null}
             obscured={busy}
             onDuration={setDuration}
-            onPlayFailed={setPlayFailed}
+            onPlayFailed={onPlayFailed}
           />
           {busy && <div className="busy-overlay">{t.processing}</div>}
         </section>
@@ -655,7 +697,7 @@ export default function App(): React.JSX.Element {
       </div>
 
       <footer className={statusClass}>
-        {playFailed ? `${t.playError} · ${statusLine}` : statusLine}
+        {playFailed && playErrorMsg ? `${playErrorMsg} · ${statusLine}` : statusLine}
       </footer>
 
       {helpOpen && (

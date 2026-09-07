@@ -46,6 +46,9 @@ const zh = {
   statusCopying: '正在复制到 {n} 个分类…',
   classifyFailed: '分类失败',
   playError: '无法播放该视频。仍可在左侧改名并在右侧分类。',
+  sourceMissing: '待处理文件夹已不存在或不可访问，请重新选择。',
+  playErrorNas:
+    '无法播放该 NAS 文件。请确认网络与权限正常；若路径含空格，可先在资源管理器中打开该文件再重试。仍可改名并分类。',
   mpvMissing: '未找到 mpv 播放器。请运行 npm run fetch:mpv，或设置 MPV_PATH 指向 mpv.exe。仍可改名并分类。',
   mpvStartFailed: 'mpv 启动失败。请确认已打包/下载 mpv 运行时。仍可改名并分类。',
   videoEmpty: '选择待处理文件夹后，将在此播放视频',
@@ -116,6 +119,9 @@ const en: Messages = {
   statusCopying: 'Copying to {n} categories…',
   classifyFailed: 'Classify failed',
   playError: 'Cannot play this video. You can still rename it on the left and classify on the right.',
+  sourceMissing: 'Inbox folder is missing or inaccessible. Please select it again.',
+  playErrorNas:
+    'Cannot play this NAS file. Check network/permissions; if the path has spaces, open the file once in Explorer and retry. You can still rename and classify.',
   mpvMissing:
     'mpv player not found. Run npm run fetch:mpv, or set MPV_PATH to mpv.exe. You can still rename and classify.',
   mpvStartFailed:

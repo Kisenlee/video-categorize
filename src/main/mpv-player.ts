@@ -7,6 +7,7 @@ import { app } from 'electron'
 import { randomBytes } from 'crypto'
 import type { PlayerBounds, PlayerState } from '../shared/types'
 import { MpvWindowController } from './mpv-window'
+import { PlaybackHttpServer } from './playback-http'
 
 export type { PlayerBounds, PlayerState }
 
@@ -25,6 +26,8 @@ function resolveMpvPath(): string | null {
   if (process.env.MPV_PATH) candidates.push(process.env.MPV_PATH)
   if (app.isPackaged) {
     candidates.push(join(process.resourcesPath, 'mpv', 'mpv.exe'))
+    candidates.push(join(dirname(process.execPath), 'resources', 'mpv', 'mpv.exe'))
+    candidates.push(join(dirname(process.execPath), 'mpv', 'mpv.exe'))
   } else {
     candidates.push(join(process.cwd(), 'vendor', 'mpv', 'mpv.exe'))
     candidates.push(join(app.getAppPath(), 'vendor', 'mpv', 'mpv.exe'))
@@ -36,8 +39,32 @@ function resolveMpvPath(): string | null {
 }
 
 function toMpvPath(filePath: string): string {
-  if (filePath.startsWith('\\\\')) return filePath.replace(/\\/g, '/')
-  return filePath
+  return filePath.replace(/\\/g, '/')
+}
+
+/** Try several spellings — UNC + spaces (e.g. \\ip\share\zzzz temp) are picky on Windows mpv. */
+function mpvLoadPaths(filePath: string): string[] {
+  const forward = toMpvPath(filePath)
+  const out: string[] = []
+  const add = (p: string): void => {
+    if (p && !out.includes(p)) out.push(p)
+  }
+
+  // Native Windows UNC/local first (CreateFileW); then slash form.
+  add(filePath)
+  add(forward)
+
+  if (filePath.startsWith('\\\\') || forward.startsWith('//')) {
+    const body = forward.replace(/^\/\//, '')
+    const parts = body.split('/')
+    const host = parts.shift() ?? ''
+    const encodedRest = parts.map((s) => encodeURIComponent(s)).join('/')
+    if (host) {
+      add(`file:////${host}/${encodedRest}`)
+      add(`smb://${host}/${encodedRest}`)
+    }
+  }
+  return out
 }
 
 export class MpvPlayer {
@@ -62,6 +89,12 @@ export class MpvPlayer {
   private lastBounds: PlayerBounds | null = null
   private framePad = { x: 0, y: 0 }
   private loadGeneration = 0
+  private opChain: Promise<void> = Promise.resolve()
+  private fileLoadedWaiter: {
+    gen: number
+    resolve: (ok: boolean) => void
+  } | null = null
+  private http = new PlaybackHttpServer()
 
   private state: PlayerState = {
     ready: false,
@@ -204,16 +237,59 @@ export class MpvPlayer {
     )
   }
 
+  private startingVo = false
+
   async ensureStarted(): Promise<void> {
     if (this.state.ready && this.proc && this.ipc) return
     if (this.starting) return this.starting
-    this.starting = this.start().finally(() => {
+    this.starting = this.startWithVoFallback().finally(() => {
       this.starting = null
     })
     return this.starting
   }
 
-  private async start(): Promise<void> {
+  private async startWithVoFallback(): Promise<void> {
+    try {
+      await this.start('gpu-next')
+    } catch {
+      this.killProcOnly()
+      await this.start('gpu')
+    }
+  }
+
+  private killProcOnly(): void {
+    this.startingVo = true
+    try {
+      this.ipc?.destroy()
+    } catch {
+      // ignore
+    }
+    this.ipc = null
+    const proc = this.proc
+    this.proc = null
+    this.win = null
+    this.state.ready = false
+    if (proc && !proc.killed) {
+      try {
+        proc.kill()
+      } catch {
+        // ignore
+      }
+      if (process.platform === 'win32' && proc.pid) {
+        try {
+          spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], {
+            windowsHide: true,
+            stdio: 'ignore'
+          })
+        } catch {
+          // ignore
+        }
+      }
+    }
+    this.startingVo = false
+  }
+
+  private async start(vo: 'gpu-next' | 'gpu'): Promise<void> {
     const mpvPath = resolveMpvPath()
     this.state.mpvAvailable = Boolean(mpvPath)
     if (!mpvPath) {
@@ -225,6 +301,8 @@ export class MpvPlayer {
     this.pipeName = `\\\\.\\pipe\\vc-mpv-${process.pid}-${randomBytes(4).toString('hex')}`
     this.win = new MpvWindowController(this.windowTitle, this.parent)
 
+    // Prefer gpu-next for HDR→SDR; fall back to gpu if VO init fails on this machine.
+    // Keep window on-screen — offscreen geometry broke VO on some GPUs/portable extracts.
     this.proc = spawn(
       mpvPath,
       [
@@ -241,14 +319,17 @@ export class MpvPlayer {
         '--input-vo-keyboard=no',
         '--focus-on=never',
         '--hwdec=auto-safe',
-        '--vo=gpu-next',
+        `--vo=${vo}`,
         '--tone-mapping=auto',
         '--target-prim=bt.709',
         '--target-trc=srgb',
         '--target-peak=203',
         '--target-colorspace-hint=no',
         '--cursor-autohide=no',
-        '--geometry=64x64+-32000+-32000',
+        '--geometry=64x64+0+0',
+        '--cache=yes',
+        '--demuxer-readahead-secs=8',
+        '--network-timeout=60',
         '--quiet',
         '--no-terminal'
       ],
@@ -260,13 +341,15 @@ export class MpvPlayer {
     )
 
     const proc = this.proc
-    proc.on('exit', (code) => {
+    proc.on('exit', () => {
+      if (this.proc !== proc) return
       this.state.ready = false
       this.ipc?.destroy()
       this.ipc = null
       this.proc = null
       this.win = null
-      if (!this.destroyed && code && code !== 0) this.setError('mpvExited')
+      this.resolveFileLoaded(false)
+      if (!this.destroyed && !this.startingVo) this.setError('mpvExited')
     })
 
     try {
@@ -276,9 +359,18 @@ export class MpvPlayer {
       throw err
     }
 
+    if (!this.proc) {
+      this.setError('mpvExited')
+      throw new Error('mpvExited')
+    }
+
     // Wait until the native window exists
     for (let i = 0; i < 40; i++) {
       if (this.win?.resolve()) break
+      if (!this.proc) {
+        this.setError('mpvExited')
+        throw new Error('mpvExited')
+      }
       await new Promise((r) => setTimeout(r, 50))
     }
     this.win?.hide()
@@ -360,6 +452,7 @@ export class MpvPlayer {
         this.emit()
       } else if (name === 'duration' && typeof data === 'number') {
         this.state.duration = data
+        if (data > 0) this.resolveFileLoaded(true)
         this.emit()
       } else if (name === 'pause' && typeof data === 'boolean') {
         this.state.paused = data
@@ -381,6 +474,7 @@ export class MpvPlayer {
     }
 
     if (msg.event === 'end-file' && msg.reason === 'error') {
+      this.resolveFileLoaded(false)
       if (this.ignoreEndFileErrors || !this.state.path) return
       this.setError('playFailed')
       void this.setVisible(false)
@@ -390,12 +484,49 @@ export class MpvPlayer {
     if (msg.event === 'file-loaded') {
       this.ignoreEndFileErrors = false
       this.setError(null)
+      this.resolveFileLoaded(true)
       void this.refreshDuration()
       if (this.visible && !this.suspended) this.syncOverlay(true)
     }
   }
 
-  private command(args: unknown[]): Promise<unknown> {
+  private resolveFileLoaded(ok: boolean): void {
+    const waiter = this.fileLoadedWaiter
+    if (!waiter) return
+    this.fileLoadedWaiter = null
+    waiter.resolve(ok)
+  }
+
+  private waitForFileLoaded(gen: number, timeoutMs: number): Promise<boolean> {
+    this.resolveFileLoaded(false)
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (this.fileLoadedWaiter?.gen === gen) {
+          this.fileLoadedWaiter = null
+          resolve(false)
+        }
+      }, timeoutMs)
+      this.fileLoadedWaiter = {
+        gen,
+        resolve: (ok) => {
+          clearTimeout(timer)
+          resolve(ok)
+        }
+      }
+    })
+  }
+
+  /** Serialize load/stop/unload so unmount races cannot cancel a fresh load permanently. */
+  private enqueue(op: () => Promise<void>): Promise<void> {
+    const run = this.opChain.then(op, op)
+    this.opChain = run.then(
+      () => undefined,
+      () => undefined
+    )
+    return run
+  }
+
+  private command(args: unknown[], timeoutMs = 10000): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.ipc) {
         reject(new Error('mpvNotReady'))
@@ -414,7 +545,7 @@ export class MpvPlayer {
           this.pending.delete(id)
           reject(new Error('mpvTimeout'))
         }
-      }, 10000)
+      }, timeoutMs)
     })
   }
 
@@ -489,6 +620,10 @@ export class MpvPlayer {
   }
 
   async load(filePath: string): Promise<void> {
+    return this.enqueue(() => this.loadInternal(filePath))
+  }
+
+  private async loadInternal(filePath: string): Promise<void> {
     const gen = ++this.loadGeneration
     this.ignoreEndFileErrors = true
     try {
@@ -509,31 +644,60 @@ export class MpvPlayer {
       this.suspended = false
       this.visible = true
       this.refreshFramePad()
-      // Show surface first so vo has somewhere to draw
       this.syncOverlay(true)
+      this.win?.resolve()
 
-      await this.command(['loadfile', toMpvPath(filePath), 'replace'])
-      if (gen !== this.loadGeneration) return
+      const paths: string[] = []
+      const isUnc = filePath.startsWith('\\\\') || filePath.startsWith('//')
+      // NAS/UNC: prefer localhost Range proxy (Node can read; mpv often cannot open SMB directly).
+      if (isUnc) {
+        try {
+          this.http.clearTokens()
+          paths.push(await this.http.urlFor(filePath))
+        } catch {
+          // fall through to direct paths
+        }
+      }
+      paths.push(...mpvLoadPaths(filePath))
+
+      let loaded = false
+      for (const candidate of paths) {
+        if (gen !== this.loadGeneration) return
+        const loadedPromise = this.waitForFileLoaded(gen, 45000)
+        void this.command(['loadfile', candidate, 'replace'], 45000).catch((err: Error) => {
+          if (err?.message !== 'mpvTimeout') this.resolveFileLoaded(false)
+        })
+        loaded = await loadedPromise
+        if (gen !== this.loadGeneration) return
+        if (loaded) break
+      }
+
+      if (!loaded) {
+        this.ignoreEndFileErrors = false
+        this.setError('playFailed')
+        this.visible = false
+        this.win?.hide()
+        return
+      }
 
       await this.commandIgnore(['set_property', 'pause', false])
       await this.commandIgnore(['set_property', 'volume', this.state.volume])
       await this.commandIgnore(['set_property', 'mute', this.state.muted])
       await this.commandIgnore(['seek', 0, 'absolute'])
 
-      // Re-resolve HWND in case mpv recreated the window on load
       this.win?.resolve()
-      this.syncOverlay(true)
-
-      await new Promise((r) => setTimeout(r, 120))
-      if (gen !== this.loadGeneration) return
-
       this.syncOverlay(true)
       this.ignoreEndFileErrors = false
       await this.refreshDuration()
+      if (!(this.state.duration > 0)) {
+        await new Promise((r) => setTimeout(r, 800))
+        await this.refreshDuration()
+      }
       this.emit()
     } catch {
       if (gen !== this.loadGeneration) return
       this.ignoreEndFileErrors = false
+      this.resolveFileLoaded(false)
       this.setError('playFailed')
       this.visible = false
       this.win?.hide()
@@ -541,34 +705,31 @@ export class MpvPlayer {
   }
 
   async unloadForClassify(): Promise<void> {
-    this.loadGeneration += 1
-    this.ignoreEndFileErrors = true
-    this.state.path = null
-    this.state.time = 0
-    this.state.duration = 0
-    this.state.paused = true
-    this.state.eof = false
-    this.visible = false
-    this.setError(null)
-    this.win?.hide()
-    if (!this.state.ready) return
-    await this.pause()
-    await this.commandIgnore(['stop'])
-    this.emit()
+    return this.enqueue(() => this.stopInternal({ clearError: true }))
   }
 
   async stop(): Promise<void> {
+    return this.enqueue(() => this.stopInternal({ clearError: false }))
+  }
+
+  private async stopInternal(opts: { clearError: boolean }): Promise<void> {
     this.loadGeneration += 1
     this.ignoreEndFileErrors = true
+    this.resolveFileLoaded(false)
+    this.http.clearTokens()
     this.state.path = null
     this.state.time = 0
     this.state.duration = 0
     this.state.paused = true
     this.state.eof = false
     this.visible = false
-    this.setError(null)
+    if (opts.clearError) this.setError(null)
     this.win?.hide()
-    if (!this.state.ready) return
+    if (!this.state.ready) {
+      this.emit()
+      return
+    }
+    await this.commandIgnore(['set_property', 'pause', true])
     await this.commandIgnore(['stop'])
     this.emit()
   }
@@ -622,18 +783,59 @@ export class MpvPlayer {
     await this.commandIgnore(['set_property', 'mute', muted])
   }
 
-  async destroy(): Promise<void> {
+  /** Tear down mpv immediately. Must not await IPC — app exit races that and orphans mpv.exe. */
+  destroy(): void {
     this.destroyed = true
     this.loadGeneration += 1
+    this.visible = false
+    this.suspended = false
     if (this.pollTimer) {
       clearInterval(this.pollTimer)
       this.pollTimer = null
     }
-    await this.commandIgnore(['quit'])
-    this.ipc?.destroy()
+    for (const [, pending] of this.pending) {
+      pending.reject(new Error('destroyed'))
+    }
+    this.pending.clear()
+    this.resolveFileLoaded(false)
+    this.http.close()
+
+    // Best-effort soft quit, then hard-kill. Never wait.
+    try {
+      this.ipc?.write(JSON.stringify({ command: ['quit'] }) + '\n')
+    } catch {
+      // ignore
+    }
+    try {
+      this.ipc?.destroy()
+    } catch {
+      // ignore
+    }
     this.ipc = null
-    if (this.proc && !this.proc.killed) this.proc.kill()
+
+    const proc = this.proc
     this.proc = null
     this.win = null
+    this.state.ready = false
+    this.state.path = null
+
+    if (proc && !proc.killed) {
+      try {
+        proc.kill()
+      } catch {
+        // ignore
+      }
+      // Windows: ensure the child is gone even if soft kill is ignored.
+      if (process.platform === 'win32' && proc.pid) {
+        try {
+          spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], {
+            windowsHide: true,
+            stdio: 'ignore'
+          })
+        } catch {
+          // ignore
+        }
+      }
+    }
   }
 }

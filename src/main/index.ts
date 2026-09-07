@@ -63,9 +63,13 @@ function createWindow(): void {
     mainWindow?.show()
   })
 
-  mainWindow.on('closed', () => {
-    void mpvPlayer?.destroy()
+  mainWindow.on('close', () => {
+    // Sync kill before the process tears down; async quit left orphaned mpv.exe.
+    mpvPlayer?.destroy()
     mpvPlayer = null
+  })
+
+  mainWindow.on('closed', () => {
     mainWindow = null
   })
 
@@ -322,6 +326,10 @@ function registerIpc(): void {
     return scanVideos(dir)
   })
 
+  ipcMain.handle('fs:pathExists', async (_e, targetPath: string) => {
+    return Boolean(targetPath && existsSync(targetPath))
+  })
+
   ipcMain.handle('categories:list', async (_e, dir: string) => {
     return listCategories(dir)
   })
@@ -573,9 +581,14 @@ app.whenReady().then(() => {
   })
 })
 
+app.on('before-quit', () => {
+  mpvPlayer?.destroy()
+  mpvPlayer = null
+})
+
 app.on('window-all-closed', () => {
   void stopCategoryWatch()
-  void mpvPlayer?.destroy()
+  mpvPlayer?.destroy()
   mpvPlayer = null
   if (process.platform !== 'darwin') app.quit()
 })

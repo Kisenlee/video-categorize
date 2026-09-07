@@ -18,6 +18,9 @@ const api = {
 
   scanVideos: (dir: string): Promise<VideoItem[]> => ipcRenderer.invoke('videos:scan', dir),
 
+  pathExists: (targetPath: string): Promise<boolean> =>
+    ipcRenderer.invoke('fs:pathExists', targetPath),
+
   listCategories: (dir: string): Promise<CategoryItem[]> =>
     ipcRenderer.invoke('categories:list', dir),
 

@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.0.3] - 2026-09-07
+
+### Fixed
+
+- Playback stuck on “reading” / silent failures: serialize load/stop, wait for `file-loaded`, and surface errors in the UI.
+- Orphaned `mpv.exe` after quit: tear down the player synchronously on window close / app exit.
+- NAS/UNC playback (including paths with spaces): prefer a localhost Range HTTP proxy so Node reads SMB and mpv plays from `127.0.0.1`.
+- mpv startup on some GPUs: try `gpu-next` first, fall back to `gpu`; keep on-screen geometry (offscreen VO init was unreliable).
+- HDR→SDR brightness: restore tone-mapping targets (`bt.709` / `srgb` / peak 203) with `gpu-next` when available.
+- Stale inbox after deleting the source folder outside the app: refresh on window focus.
+
 ## [1.0.2] - 2026-09-07
 
 ### Added

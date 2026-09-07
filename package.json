@@ -1,6 +1,6 @@
 {
   "name": "video-classifier",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Windows desktop helper for classifying local / NAS videos",
   "main": "./out/main/index.js",
   "author": "video-classifier",

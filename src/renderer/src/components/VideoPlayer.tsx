@@ -16,10 +16,12 @@ function formatTime(seconds: number): string {
 
 function playErrorText(
   error: string | null,
+  filePath: string | null,
   t: ReturnType<typeof useI18n>['t']
 ): string {
   if (error === 'mpvMissing') return t.mpvMissing
   if (error === 'mpvIpcFailed' || error === 'mpvExited') return t.mpvStartFailed
+  if (filePath?.startsWith('\\\\') || filePath?.startsWith('//')) return t.playErrorNas
   return t.playError
 }
 
@@ -27,7 +29,7 @@ interface VideoPlayerProps {
   filePath: string | null
   obscured?: boolean
   onDuration: (seconds: number | null) => void
-  onPlayFailed: (failed: boolean) => void
+  onPlayFailed: (failed: boolean, message?: string | null) => void
 }
 
 export default function VideoPlayer({
@@ -45,6 +47,7 @@ export default function VideoPlayer({
   const [muted, setMuted] = useState(false)
   const [failed, setFailed] = useState(false)
   const [errorKey, setErrorKey] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
 
   const syncBounds = useCallback(() => {
     const el = stageRef.current
@@ -64,6 +67,7 @@ export default function VideoPlayer({
       if (typeof state.duration === 'number' && state.duration > 0) {
         setDuration(state.duration)
         onDuration(state.duration)
+        setLoading(false)
       }
       setPlaying(!state.paused && Boolean(state.path))
       setVolume(Math.max(0, Math.min(1, (state.volume ?? 0) / 100)))
@@ -71,10 +75,14 @@ export default function VideoPlayer({
       const err = state.error
       setErrorKey(err)
       setFailed(Boolean(err))
-      onPlayFailed(Boolean(err))
+      onPlayFailed(
+        Boolean(err),
+        err ? playErrorText(err, state.path ?? filePath, t) : null
+      )
+      if (err) setLoading(false)
     })
     return off
-  }, [onDuration, onPlayFailed])
+  }, [onDuration, onPlayFailed, filePath, t])
 
   useEffect(() => {
     syncBounds()
@@ -94,33 +102,52 @@ export default function VideoPlayer({
     setPlaying(false)
     setFailed(false)
     setErrorKey(null)
-    onPlayFailed(false)
+    onPlayFailed(false, null)
     onDuration(null)
 
     if (!filePath) {
+      setLoading(false)
       void window.api.playerStop()
       return
     }
 
+    setLoading(true)
     syncBounds()
     let cancelled = false
+    const watchdog = window.setTimeout(() => {
+      if (cancelled) return
+      setLoading(false)
+      setFailed(true)
+      setErrorKey('playFailed')
+      onPlayFailed(true, playErrorText('playFailed', filePath, t))
+    }, 120000)
+
     void window.api.playerLoad(filePath).then((state) => {
       if (cancelled || !state) return
       if (state.error) {
         setErrorKey(state.error)
         setFailed(true)
-        onPlayFailed(true)
+        setLoading(false)
+        onPlayFailed(true, playErrorText(state.error, filePath, t))
+        window.clearTimeout(watchdog)
+        return
       }
       if (state.duration > 0) {
         setDuration(state.duration)
         onDuration(state.duration)
+        setLoading(false)
+        window.clearTimeout(watchdog)
       }
       setPlaying(!state.paused)
     })
+
     return () => {
       cancelled = true
+      window.clearTimeout(watchdog)
+      // Do not playerStop() here — it races the next mount's playerLoad and leaves
+      // duration stuck on "reading" with no error.
     }
-  }, [filePath, onDuration, onPlayFailed, syncBounds])
+  }, [filePath, onDuration, onPlayFailed, syncBounds, t])
 
   useEffect(() => {
     // While classifying, keep overlay hidden; after load of next file, load() repositions itself.
@@ -128,12 +155,6 @@ export default function VideoPlayer({
       void window.api.playerSetVisible(false)
     }
   }, [obscured])
-
-  useEffect(() => {
-    return () => {
-      void window.api.playerStop()
-    }
-  }, [])
 
   const togglePlay = useCallback(() => {
     if (!filePath) return
@@ -160,7 +181,9 @@ export default function VideoPlayer({
         {!filePath ? (
           <div className="video-empty">{t.videoEmpty}</div>
         ) : failed ? (
-          <div className="video-error">{playErrorText(errorKey, t)}</div>
+          <div className="video-error">{playErrorText(errorKey, filePath, t)}</div>
+        ) : loading && duration <= 0 ? (
+          <div className="video-empty">{t.reading}</div>
         ) : (
           <div className="video-native-slot" aria-hidden />
         )}
