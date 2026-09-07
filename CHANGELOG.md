@@ -1,0 +1,26 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+## [1.0.1] - 2026-09-07
+
+### Fixed
+
+- Player no longer appears as a second taskbar / Alt+Tab entry (`VideoClassifierPlayer`); the mpv window is owned by the main app and hidden from the taskbar.
+- Player z-order: stopped using always-on-top, so the video no longer covers other applications; it stays above the main window only while that window is in the foreground, and is no longer stuck underneath the UI.
+- High-DPI / 4K positioning: convert DIP coordinates with `screen.dipToScreenRect` so the overlay aligns with the video stage on scaled displays.
+- Black screen after classifying a video: unload the current file before move/copy, then force a fresh player load for the next item.
+- Opening a folder dialog while playing: pause playback and park the overlay instead of minimizing (avoids multi-monitor jumping).
+- Over-bright picture on some HDR/SDR setups: force SDR-oriented tone mapping targets for more natural brightness.
+- README is English-only (notes that the UI also supports Chinese).
+
+## [1.0.0] - 2026-09-07
+
+### Added
+
+- Windows desktop video classifier with inbox / target folders.
+- Single- and multi-category classify flows with rename and conflict suffixes (`_1`, `_2`, …).
+- Live category list from first-level subfolders.
+- Chinese / English UI switch.
+- Bundled mpv playback (HEVC and common formats, including NAS/UNC paths).
+- GitHub Actions release workflow for portable `.exe` and `.zip` on `v*` tags.

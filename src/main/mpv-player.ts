@@ -139,24 +139,12 @@ export class MpvPlayer {
       if (!this.suspended && this.state.path) void this.setVisible(true)
     })
     parent.on('focus', () => {
-      if (!this.suspended && this.visible && this.state.path) this.syncOverlay(true)
-    })
-    parent.on('blur', () => {
-      if (this.suspended || !this.win) return
-      if (this.visible && this.state.path && this.lastBounds) {
-        const content = this.parent.getContentBounds()
-        this.placeDipRect(
-          {
-            x: content.x + this.lastBounds.x,
-            y: content.y + this.lastBounds.y,
-            width: this.lastBounds.width,
-            height: this.lastBounds.height
-          },
-          true,
-          false
-        )
+      if (!this.suspended && this.visible && this.state.path) {
+        this.syncOverlay(true)
+        this.win?.showAboveOwner()
       }
     })
+    // Owned window tracks the Electron owner in the z-order; no HWND_TOPMOST needed.
   }
 
   getState(): PlayerState {
@@ -183,8 +171,7 @@ export class MpvPlayer {
 
   private placeDipRect(
     dip: { x: number; y: number; width: number; height: number },
-    show: boolean,
-    topmost = true
+    show: boolean
   ): void {
     // Renderer + Electron bounds are DIP; Win32 SetWindowPos needs physical pixels on scaled displays.
     const phys = screen.dipToScreenRect(this.parent, {
@@ -193,7 +180,7 @@ export class MpvPlayer {
       width: Math.max(2, Math.round(dip.width)),
       height: Math.max(2, Math.round(dip.height))
     })
-    this.win?.setBounds(phys.x, phys.y, phys.width, phys.height, { topmost, show })
+    this.win?.setBounds(phys.x, phys.y, phys.width, phys.height, { show })
   }
 
   private syncOverlay(show: boolean): void {
@@ -230,7 +217,7 @@ export class MpvPlayer {
 
     this.windowTitle = `VideoClassifierPlayer-${process.pid}-${randomBytes(3).toString('hex')}`
     this.pipeName = `\\\\.\\pipe\\vc-mpv-${process.pid}-${randomBytes(4).toString('hex')}`
-    this.win = new MpvWindowController(this.windowTitle)
+    this.win = new MpvWindowController(this.windowTitle, this.parent)
 
     this.proc = spawn(
       mpvPath,
@@ -246,6 +233,7 @@ export class MpvPlayer {
         '--osc=no',
         '--input-default-bindings=no',
         '--input-vo-keyboard=no',
+        '--focus-on=never',
         '--hwdec=auto-safe',
         '--vo=gpu-next',
         '--tone-mapping=auto',
@@ -471,7 +459,7 @@ export class MpvPlayer {
     if (this.suspended) return
     if (visible && this.state.path) {
       this.syncOverlay(true)
-      this.win?.showTopmost()
+      this.win?.showAboveOwner()
     } else {
       this.win?.hide()
     }
