@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.0.2] - 2026-09-07
+
+### Added
+
+- Keyboard shortcuts: Space play/pause; A/D seek ±1/10 of duration; Q/E single/multi mode; F confirm multi-classify; R revert last classify.
+- Per-category key binds (`1–0`, `W`, `S`, `Z`, `X`, `C`) for the current session (not persisted).
+- Shortcuts help (`?` in the top-right).
+- Undo the last classify action (one record): restore files to the inbox source path.
+- Keep the mouse cursor visible over the mpv video surface.
+
+### Fixed
+
+- Shortcuts stop working after clicking the video a few times: mpv no longer steals keyboard focus (`WS_EX_NOACTIVATE`), and focus is pulled back to the main window if it does.
+- Help modal covered by the video overlay: hide the player while help is open.
+
 ## [1.0.1] - 2026-09-07
 
 ### Fixed

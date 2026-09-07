@@ -48,6 +48,11 @@ const api = {
     categoryPaths: string[]
   }): Promise<ClassifyResult> => ipcRenderer.invoke('classify:multi', payload),
 
+  classifyRevert: (payload: {
+    sourcePath: string
+    destinations: string[]
+  }): Promise<ClassifyResult> => ipcRenderer.invoke('classify:revert', payload),
+
   mediaToUrl: (filePath: string): Promise<string> => ipcRenderer.invoke('media:toUrl', filePath),
 
   setLocale: (locale: 'zh' | 'en'): Promise<void> => ipcRenderer.invoke('app:setLocale', locale),
@@ -69,6 +74,8 @@ const api = {
   playerSetMuted: (muted: boolean): Promise<void> => ipcRenderer.invoke('player:setMuted', muted),
   playerSetVisible: (visible: boolean): Promise<void> =>
     ipcRenderer.invoke('player:setVisible', visible),
+  playerSuspendForUi: (): Promise<void> => ipcRenderer.invoke('player:suspendForUi'),
+  playerResumeAfterUi: (): Promise<void> => ipcRenderer.invoke('player:resumeAfterUi'),
 
   onPlayerState: (callback: (state: PlayerState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: PlayerState): void => {

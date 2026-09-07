@@ -144,7 +144,13 @@ export class MpvPlayer {
         this.win?.showAboveOwner()
       }
     })
-    // Owned window tracks the Electron owner in the z-order; no HWND_TOPMOST needed.
+    parent.on('blur', () => {
+      // Clicks on the mpv surface can activate it and steal shortcuts; pull focus back.
+      if (this.win?.isForeground()) {
+        this.parent.focus()
+        this.parent.webContents.focus()
+      }
+    })
   }
 
   getState(): PlayerState {
@@ -241,7 +247,7 @@ export class MpvPlayer {
         '--target-trc=srgb',
         '--target-peak=203',
         '--target-colorspace-hint=no',
-        '--cursor-autohide=always',
+        '--cursor-autohide=no',
         '--geometry=64x64+-32000+-32000',
         '--quiet',
         '--no-terminal'

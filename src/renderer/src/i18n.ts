@@ -56,6 +56,26 @@ const zh = {
   categoryMissing: '分类文件夹不存在',
   categoryMissingNamed: '分类文件夹不存在: {name}',
   noCategorySelected: '请至少选择一个分类',
+  revertMissing: '无法撤销：找不到已分类的文件',
+  revertSourceExists: '无法撤销：源位置已有文件',
+  revertOk: '已撤销上一次分类',
+  revertEmpty: '没有可撤销的操作',
+  revertFailed: '撤销失败',
+  shortcutsHelp: '快捷键',
+  shortcutsTitle: '快捷键说明',
+  shortcutsClose: '关闭',
+  bindKey: '绑定',
+  bindEmpty: '—',
+  bindWaiting: '…',
+  bindHint: '点击后按 1–0 / W S Z X C 绑定；再点清除',
+  shortcutSpace: '空格 — 播放 / 暂停',
+  shortcutA: 'A — 快退 1/10 时长',
+  shortcutD: 'D — 快进 1/10 时长',
+  shortcutQ: 'Q — 单类模式',
+  shortcutE: 'E — 复类模式',
+  shortcutF: 'F — 复类确认',
+  shortcutR: 'R — 撤销上一次分类（仅保留一条）',
+  shortcutBinds: '1–0、W、S、Z、X、C — 触发已绑定分类（单类：直接分类；复类：勾选/取消）',
   langZh: '中文',
   langEn: 'EN'
 }
@@ -108,6 +128,26 @@ const en: Messages = {
   categoryMissing: 'Category folder not found',
   categoryMissingNamed: 'Category folder not found: {name}',
   noCategorySelected: 'Select at least one category',
+  revertMissing: 'Cannot revert: classified file not found',
+  revertSourceExists: 'Cannot revert: source path already exists',
+  revertOk: 'Reverted last classify',
+  revertEmpty: 'Nothing to revert',
+  revertFailed: 'Revert failed',
+  shortcutsHelp: 'Shortcuts',
+  shortcutsTitle: 'Keyboard shortcuts',
+  shortcutsClose: 'Close',
+  bindKey: 'Bind',
+  bindEmpty: '—',
+  bindWaiting: '…',
+  bindHint: 'Click, then press 1–0 / W S Z X C to bind; click again to clear',
+  shortcutSpace: 'Space — Play / Pause',
+  shortcutA: 'A — Seek back 1/10 duration',
+  shortcutD: 'D — Seek forward 1/10 duration',
+  shortcutQ: 'Q — Single mode',
+  shortcutE: 'E — Multi mode',
+  shortcutF: 'F — Confirm multi classify',
+  shortcutR: 'R — Revert last classify (one record only)',
+  shortcutBinds: '1–0, W, S, Z, X, C — Bound category (single: classify; multi: toggle)',
   langZh: '中文',
   langEn: 'EN'
 }
@@ -140,6 +180,8 @@ export function formatClassifyError(error: string, t: Messages): string {
   if (error === 'classifyFailed') return t.classifyFailed
   if (error === 'categoryMissing') return t.categoryMissing
   if (error === 'noCategorySelected') return t.noCategorySelected
+  if (error === 'revertMissing') return t.revertMissing
+  if (error === 'revertSourceExists') return t.revertSourceExists
   if (error.startsWith('categoryMissing:')) {
     return interpolate(t.categoryMissingNamed, { name: error.slice('categoryMissing:'.length) })
   }

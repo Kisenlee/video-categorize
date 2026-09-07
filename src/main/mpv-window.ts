@@ -17,6 +17,7 @@ const ShowWindow = user32.func('ShowWindow', 'bool', ['uintptr', 'int'])
 const IsWindow = user32.func('IsWindow', 'bool', ['uintptr'])
 const GetWindowLongPtrW = user32.func('GetWindowLongPtrW', 'int64', ['uintptr', 'int'])
 const SetWindowLongPtrW = user32.func('SetWindowLongPtrW', 'int64', ['uintptr', 'int', 'int64'])
+const GetForegroundWindow = user32.func('GetForegroundWindow', 'uintptr', [])
 
 const HWND_TOP = 0n
 const HWND_NOTOPMOST = -2n
@@ -37,6 +38,7 @@ const GWLP_HWNDPARENT = -8
 
 const WS_EX_APPWINDOW = 0x00040000
 const WS_EX_TOOLWINDOW = 0x00000080
+const WS_EX_NOACTIVATE = 0x08000000
 
 function asHwnd(v: bigint | number): bigint {
   return typeof v === 'bigint' ? v : BigInt(v as number)
@@ -49,7 +51,7 @@ function readOwnerHwnd(win: BrowserWindow): bigint {
 
 /**
  * Controls the standalone mpv HWND: owned by the Electron window (no extra
- * taskbar/Alt-Tab entry) and never HWND_TOPMOST (won't cover other apps).
+ * taskbar/Alt-Tab entry), never HWND_TOPMOST, and never takes keyboard focus.
  */
 export class MpvWindowController {
   private title: string
@@ -60,6 +62,10 @@ export class MpvWindowController {
   constructor(title: string, owner: BrowserWindow) {
     this.title = title
     this.owner = owner
+  }
+
+  get handle(): bigint {
+    return this.hwnd
   }
 
   resolve(): boolean {
@@ -74,17 +80,25 @@ export class MpvWindowController {
     return true
   }
 
+  isForeground(): boolean {
+    if (!this.resolve()) return false
+    return asHwnd(GetForegroundWindow() as bigint | number) === this.hwnd
+  }
+
+  private applyExStyle(): void {
+    if (this.hwnd === 0n) return
+    let ex = Number(GetWindowLongPtrW(this.hwnd, GWL_EXSTYLE))
+    ex = (ex & ~WS_EX_APPWINDOW) | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+    SetWindowLongPtrW(this.hwnd, GWL_EXSTYLE, BigInt(ex))
+  }
+
   private ensureAttached(): void {
     if (this.attached || this.hwnd === 0n) return
     const ownerHwnd = readOwnerHwnd(this.owner)
 
     // Owned window: stays above the owner, hides with it, no separate taskbar button.
     SetWindowLongPtrW(this.hwnd, GWLP_HWNDPARENT, ownerHwnd)
-
-    let ex = GetWindowLongPtrW(this.hwnd, GWL_EXSTYLE)
-    ex = Number(ex)
-    ex = (ex & ~WS_EX_APPWINDOW) | WS_EX_TOOLWINDOW
-    SetWindowLongPtrW(this.hwnd, GWL_EXSTYLE, BigInt(ex))
+    this.applyExStyle()
 
     // Drop any residual topmost flag from earlier runs / mpv defaults.
     SetWindowPos(
@@ -101,8 +115,8 @@ export class MpvWindowController {
 
   setBounds(x: number, y: number, width: number, height: number, opts?: { show?: boolean }): void {
     if (!this.resolve()) return
+    this.applyExStyle()
     const show = opts?.show !== false
-    // HWND_TOP = above siblings in the owner group, not above the whole desktop.
     SetWindowPos(
       this.hwnd,
       HWND_TOP,
@@ -131,6 +145,7 @@ export class MpvWindowController {
 
   showAboveOwner(): void {
     if (!this.resolve()) return
+    this.applyExStyle()
     ShowWindow(this.hwnd, SW_SHOWNA)
     SetWindowPos(
       this.hwnd,

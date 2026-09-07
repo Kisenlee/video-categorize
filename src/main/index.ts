@@ -252,6 +252,48 @@ async function classifyMulti(
   }
 }
 
+async function revertClassify(
+  sourcePath: string,
+  destinations: string[]
+): Promise<ClassifyResult> {
+  try {
+    const existing = destinations.filter((d) => existsSync(d))
+    if (existing.length === 0) {
+      return { ok: false, error: 'revertMissing' }
+    }
+    if (existsSync(sourcePath)) {
+      return { ok: false, error: 'revertSourceExists' }
+    }
+
+    const primary = existing[0]
+    const rest = existing.slice(1)
+
+    try {
+      await rename(primary, sourcePath)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'EXDEV') {
+        await copyFile(primary, sourcePath)
+        await unlink(primary)
+      } else {
+        throw err
+      }
+    }
+
+    for (const extra of rest) {
+      try {
+        await unlink(extra)
+      } catch {
+        // best-effort cleanup of multi-classify copies
+      }
+    }
+
+    return { ok: true, destinations: [sourcePath] }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 function registerIpc(): void {
   ipcMain.handle('dialog:selectSourceFolder', async () => {
     await mpvPlayer?.suspendForUi()
@@ -307,6 +349,13 @@ function registerIpc(): void {
       payload: { sourcePath: string; newBasename: string; categoryPaths: string[] }
     ) => {
       return classifyMulti(payload.sourcePath, payload.newBasename, payload.categoryPaths)
+    }
+  )
+
+  ipcMain.handle(
+    'classify:revert',
+    async (_e, payload: { sourcePath: string; destinations: string[] }) => {
+      return revertClassify(payload.sourcePath, payload.destinations)
     }
   )
 
@@ -370,6 +419,14 @@ function registerIpc(): void {
 
   ipcMain.handle('player:setVisible', async (_e, visible: boolean) => {
     await mpvPlayer?.setVisible(visible)
+  })
+
+  ipcMain.handle('player:suspendForUi', async () => {
+    await mpvPlayer?.suspendForUi()
+  })
+
+  ipcMain.handle('player:resumeAfterUi', async () => {
+    await mpvPlayer?.resumeAfterUi()
   })
 }
 
